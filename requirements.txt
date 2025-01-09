@@ -1,0 +1,10 @@
+certifi==2024.12.14
+charset-normalizer==3.4.1
+idna==3.10
+numpy==1.26.4
+opencv-python-headless==4.10.0.84
+pillow==11.1.0
+pycoral==2.0.0
+requests==2.32.3
+tflite-runtime==2.5.0.post1
+urllib3==2.3.0
