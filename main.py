@@ -22,6 +22,7 @@ interpreter = make_interpreter(model_path)
 interpreter.allocate_tensors()
 model_load_time = (time.time() - start_time) * 1000  # Convert to milliseconds
 logging.info(f"Model loaded and interpreter initialized in {model_load_time:.2f} ms.")
+size = input_size(interpreter)
 
 
 def load_labels(path):
@@ -41,9 +42,6 @@ def load_labels(path):
     label_load_time = (time.time() - start_time) * 1000  # Convert to milliseconds
     logging.info(f"Loaded {len(labels)} labels in {label_load_time:.2f} ms.")
     return labels
-
-
-labels = load_labels("coral_models/efficientdet_lite0/coco_labels.txt")
 
 
 def fetch_and_preprocess_frame(url, size):
@@ -123,8 +121,7 @@ if __name__ == "__main__":
     """
     Main function to perform object detection on a camera feed.
     """
-    url = "http://localhost:1984/api/frame.jpeg?src=webrtc_camera_voor"
-    size = input_size(interpreter)
+
     logging.info(f"Expected input size for the model: {size}")
 
     try:
