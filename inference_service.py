@@ -1,70 +1,87 @@
 import json
 import cv2
-from config import (MQTT_BROKER, MQTT_PORT, MQTT_TOPIC, CAMERA_URL,
-                    CONFIDENCE_THRESHOLD, OUTPUT_IMAGE_PATH)
+from config import (
+    MQTT_BROKER, MQTT_PORT, MQTT_TOPIC,
+    CONFIDENCE_THRESHOLD, MODEL_PATH, LABELS_PATH
+)
 from utils.logging_setup import setup_logging
 from utils.model_handling import load_model, run_inference
-from utils.image_processing import fetch_and_resize_image, draw_bounding_boxes
+from utils.image_processing import draw_bounding_boxes
 from mqtt_handler import setup_mqtt
 
-# Set up logging
+# Initialize logging, model, and MQTT client
 setup_logging()
-
-# Load the model once
-interpreter, size, model_load_time = load_model("coral_models/efficientdet_lite0/efficientdet_lite0_320_ptq_edgetpu.tflite")
+interpreter, size, model_load_time = load_model(MODEL_PATH)
 print(f"Model loaded in {model_load_time:.2f} ms.")
 
-# Load labels
-with open("coral_models/efficientdet_lite0/coco_labels.txt", "r") as f:
+with open(LABELS_PATH, "r") as f:
     labels = {i: line.strip() for i, line in enumerate(f.readlines())}
 
-# Initialize MQTT client
 mqtt_client = setup_mqtt(MQTT_BROKER, MQTT_PORT)
 
-def handle_inference():
+
+def handle_inference(camera_id):
     """
-    Perform inference when triggered via MQTT.
+    Run object detection on a snapshot for the specified camera.
     """
-    try:
-        try:
-            original_frame, resized_frame = fetch_and_resize_image(CAMERA_URL, size)
-            print("Frame fetched successfully!")
-        except Exception as e:
-            print(f"Error during fetch: {e}")
+    snapshot_path = f"/tmp/snapshot_{camera_id}.jpg"
+    original_frame = cv2.imread(snapshot_path)
 
-        # Run inference
-        objects, inference_time = run_inference(interpreter, resized_frame, CONFIDENCE_THRESHOLD)
+    if original_frame is None:
+        print(f"Failed to load snapshot from {snapshot_path}")
+        return
 
-        # Draw bounding boxes if objects are detected
-        if objects:
-            annotated_frame, draw_time = draw_bounding_boxes(original_frame, objects, labels)
-            output_path = OUTPUT_IMAGE_PATH
-            cv2.imwrite(output_path, annotated_frame)
-            print(f"Annotated image saved as {output_path}")
+    resized_frame = cv2.resize(original_frame, size)
+    objects, inference_time = run_inference(interpreter, resized_frame, CONFIDENCE_THRESHOLD)
 
-        # Publish results to MQTT
-        results = [{"label": labels.get(obj.id, "Unknown"),
-                    "score": obj.score,
-                    "bbox": [obj.bbox.xmin, obj.bbox.ymin, obj.bbox.xmax, obj.bbox.ymax]} for obj in objects]
-        payload = {"objects": results, "total_objects": len(results)}
-        mqtt_client.publish(f"{MQTT_TOPIC}/results", json.dumps(payload), retain=False)
-        print(f"Published: {payload}")
+    if objects:
+        annotated_frame, draw_time = draw_bounding_boxes(original_frame, objects, labels)
+        output_path = f"/tmp/output_with_bboxes_{camera_id}.jpg"
+        cv2.imwrite(output_path, annotated_frame)
+        print(f"Annotated image saved: {output_path}")
 
-    except Exception as e:
-        print(f"Error: {e}")
+    results = [
+        {
+            "label": labels.get(obj.id, "Unknown"),
+            "score": obj.score,
+            "bbox": [obj.bbox.xmin, obj.bbox.ymin, obj.bbox.xmax, obj.bbox.ymax],
+        }
+        for obj in objects
+    ]
+    payload = {
+        "camera_id": camera_id,
+        "objects": results,
+        "total_objects": len(results),
+        "image_path": f"/tmp/output_with_bboxes_{camera_id}.jpg",
+    }
+    mqtt_client.publish(f"{MQTT_TOPIC}/results", json.dumps(payload), retain=False)
+    print(f"Published: {payload}")
+
 
 def on_message(client, userdata, message):
     """
-    Handle incoming MQTT messages to trigger inference.
+    Process incoming MQTT messages and trigger inference.
     """
-    print(f"Received message on topic {message.topic}: {message.payload.decode()}")
-    if message.topic == f"{MQTT_TOPIC}/trigger":
-        handle_inference()
+    try:
+        payload = json.loads(message.payload.decode())
+        camera_id = payload.get("camera_id")
+
+        if not camera_id:
+            print("No camera_id provided. Skipping inference.")
+            return
+
+        print(f"Received message on topic {message.topic}: {payload}")
+        handle_inference(camera_id)
+
+    except json.JSONDecodeError:
+        print("Invalid MQTT payload: Unable to decode JSON.")
+    except Exception as e:
+        print(f"Error in on_message: {e}")
+
 
 if __name__ == "__main__":
-    # Set up MQTT subscription
     mqtt_client.subscribe(f"{MQTT_TOPIC}/trigger")
     mqtt_client.on_message = on_message
 
-    print("Inference service is running. Waiting for triggers...")
+    print(f"Inference service running. Listening on {MQTT_TOPIC}/trigger...")
     mqtt_client.loop_forever()
